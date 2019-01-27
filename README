@@ -1,0 +1,3 @@
+# The Crossword Solver
+
+The solver can be found at `bin/cw` after running `make all`.
