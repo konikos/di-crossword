@@ -15,6 +15,7 @@ CFLAGS += \
 	  -Wdouble-promotion -Wshadow -Wconversion -Wsign-conversion \
 	  -Wswitch-enum -Wswitch-default -Wundef -Wmissing-field-initializers
 
+TEST_LDFLAGS = -lbacktrace -g3
 
 all: $(TARGET)
 PHONY += all
@@ -35,8 +36,9 @@ $(TARGET): $(OBJ)
 CLEAN += $(TARGET) $(OBJ)
 
 
+$(TEST_TARGET): CFLAGS += -g3
 $(TEST_TARGET): $(filter-out $(MAIN_OBJ),$(OBJ)) $(TEST_OBJ)
-	$(CC) -o$@ $^
+	$(CC) $^ -o$@ $(TEST_LDFLAGS)
 
 CLEAN += $(TEST_TARGET) $(OBJ) $(TEST_OBJ)
 

@@ -1,7 +1,9 @@
 #include <errno.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <string.h>
 #include <unistd.h>
+#include <backtrace.h>
 #include "cwt_testlib.h"
 
 // Helper macro for dying when expr is < 0
@@ -78,6 +80,57 @@ static char *readall_from_pipe(int fd)
 	return log;
 }
 
+// Used by backtrace functions to report an errors.
+static void bt_error_callback(__unused void *data, const char *msg, int err)
+{
+	fprintf(stderr, "backtrace error (%d): %s\n", err, msg);
+}
+
+static void forked_runner_sig_handler(
+		__unused int signum, __unused siginfo_t *siginfo,
+		__unused void *context)
+{
+	struct backtrace_state *bt = backtrace_create_state(
+			NULL, 0, bt_error_callback, NULL);
+	backtrace_print(bt, 0, stderr);
+	exit(1);
+}
+
+// This is the entry function of the forked test runner process.
+static int forked_runner_main(int pipe_fd[0], struct cwt_test *test)
+{
+	int err;
+
+	// The read end is not used by the child.
+	err = close(pipe_fd[0]);
+	die_iferr(err, "could not close pipe read end");
+
+	// Connect stdout and stderr to the pipe
+	err = dup2(pipe_fd[1], 1);
+	die_iferr(err, "could not connect pipe to stdin");
+	err = dup2(pipe_fd[1], 2);
+	die_iferr(err, "could not connect pipe to stderr");
+
+	err = close(pipe_fd[1]);
+	die_iferr(err, "could not close unused fd");
+
+	struct sigaction action;
+	memset(&action, 0, sizeof(struct sigaction));
+	action.sa_flags = SA_SIGINFO;
+	action.sa_sigaction = forked_runner_sig_handler;
+	sigaction(SIGHUP, &action, NULL);
+	sigaction(SIGINT, &action, NULL);
+	sigaction(SIGQUIT, &action, NULL);
+	sigaction(SIGABRT, &action, NULL);
+	sigaction(SIGFPE, &action, NULL);
+	sigaction(SIGSEGV, &action, NULL);
+	sigaction(SIGTERM, &action, NULL);
+
+	struct cwt_test_result result = {0};
+	test->runner(test, &result);
+	return result.failed ? 1 : 0;
+}
+
 static test_result *run_test(struct cwt_test *test)
 {
 	int pipe_fd[2];
@@ -92,20 +145,8 @@ static test_result *run_test(struct cwt_test *test)
 	int child = fork();
 	die_iferr(child, "could not fork test child");
 	if (child == 0) {
-		// Connect the pipe and run the test
-		err = close(pipe_fd[0]);
-		die_iferr(err, "could not close pipe reading end");
-		err = dup2(pipe_fd[1], 1);
-		die_iferr(err, "could not connect pipe to stdin");
-
-		err = dup2(pipe_fd[1], 2);
-		die_iferr(err, "could not connect pipe to stderr");
-
-		err = close(pipe_fd[1]);
-		die_iferr(err, "could not close unused fd");
-		struct cwt_test_result result = {0};
-		test->runner(test, &result);
-		exit(result.failed ? 1 : 0);
+		int exit_code = forked_runner_main(pipe_fd, test);
+		exit(exit_code);
 	}
 
 	err = close(pipe_fd[1]);
